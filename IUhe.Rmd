@@ -1,0 +1,387 @@
+---
+title: "IU length for he"
+author: "Lu Liu"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, echo=FALSE}
+library(knitr)
+# set global chunk options: images will be 7x5 inches
+knitr::opts_chunk$set(fig.width=7, fig.height=5)
+options(digits = 4)
+```
+
+```{r, include=FALSE}
+# for debugging latex
+options(tinytex.verbose = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(corrr)
+library(rstan)
+library(tidyr)
+library(MASS)
+library(fitdistrplus)
+library(bayestestR)
+library(prevtoinc)
+library("bayesplot")
+library("ggplot2")
+library("rstanarm")
+library(scatterplot3d)
+```
+## He
+
+### Load the data
+
+```{r}
+load("/Users/lu/Desktop/Winter_2023/sb corpus/sbc.Rdata")
+
+he <- sbc[sbc$transcript == "he", ]
+
+hist(he$unitLen)
+summary(he$unitLen)
+```
+### Possion 
+
+#### Regular Possion
+
+```{r}
+data <- he$unitLen
+# length <- data[["unitLen"]]
+
+length_data <- list(
+  N = 2200,
+  unit_length = data
+)
+
+stan_fit <- stan(
+  file = "He_length_poisson.stan",
+  data = length_data,
+  chain = 4
+)
+
+```
+
+```{r}
+print(stan_fit)
+```
+
+#### Truncated Possion 
+
+```{r}
+# truncated
+data <- he$unitLen
+# length <- data[["unitLen"]]
+
+length_data <- list(
+  N = 2200,
+  unit_length = data
+)
+
+stan_poisson_length <- stan(
+  file = "He_length_Tpoisson.stan",
+  data = length_data,
+  chain = 4
+)
+```
+
+```{r}
+print(stan_fit_T)
+
+list_of_draws <- extract(stan_fit_T)
+names(list_of_draws)
+
+list_of_draws$y_tilde
+length(list_of_draws$y_tilde)
+
+hist(list_of_draws$length_rep)
+```
+
+#### generate
+
+```{r}
+set.seed(3435)
+pois <- fitdist(data, 'pois', method = 'mle')
+pois["estimate"]
+```
+#### Some plot
+
+```{r}
+plot(stan_fit)
+traceplot(stan_fit)
+```
+
+```{r}
+samples <- extract(stan_fit, permuted = TRUE)
+samples
+```
+
+```{r}
+# testing for overdispersion
+
+library(AER)
+library(bayesplot)
+library(rstanarm)
+
+ppc_hist(y = he$unitLen, yrep = list_of_draws$length_rep[1:5, ], binwidth = 2.5)
+
+ppc_dens_overlay(he$unitLen, list_of_draws$length_rep[1:50, ])
+```
+
+```{r}
+plot(list_of_draws$mean_length_rep, (list_of_draws$sd_length_rep)^2)
+abline(lm((list_of_draws$sd_length_rep)^2 ~ list_of_draws$mean_length_rep), col = "red")
+
+```
+
+```{r}
+vm1 <- glm(list_of_draws$sd_length_rep^2 ~ -1 + list_of_draws$mean_length_rep, family = "poisson")
+
+dispersiontest(vm1)
+# f(u) = u^2
+vm2 <- lm(list_of_draws$sd_length_rep^2 ~ -1 + list_of_draws$mean_length_rep^2)
+```
+
+### Negative Binomial 
+```{r}
+data <- he$unitLen
+# length <- data[["unitLen"]]
+
+length_data <- list(
+  N = 2200,
+  unit_length = data
+)
+
+stan_NB_length <- stan(
+  file = "He_length_NB.stan",
+  data = length_data,
+  chain = 4
+)
+
+```
+
+
+```{r}
+print(stan_fit_T)
+
+list_of_draws2 <- extract(stan_fit_T)
+names(list_of_draws2)
+
+list_of_draws$y_tilde
+# length(list_of_draws$y_tilde)
+
+# hist(list_of_draws$length_rep)
+```
+
+```{r}
+set.seed(3435)
+nbinom <- fitdist(data, 'nbinom')
+nbinom
+```
+
+```{r}
+
+hist(he$unitLen)
+
+
+
+```
+
+### place | length Negative Binomial 
+```{r}
+unitlen_data <- he$unitLen
+place_data <- he$place
+# length <- data[["unitLen"]]
+
+length_data <- list(
+  N = 2200,
+  place = place_data,
+  unit_length = unitlen_data
+)
+
+place_length_nb <- stan(
+  file = "He_place|length_NB.stan",
+  data = length_data,
+  chain = 4
+)
+
+```
+
+```{r}
+print(stan_fit_T)
+```
+
+```{r}
+sum(is.na(place_data))
+hist(place_data, prob=TRUE)
+fit <- fitdist(place_data, "nbinom")
+fit
+fitNB = dnbinom(2200, size=13.407 , mu=2.502)
+
+```
+### MAP test negbin and poisson 
+Take both the Poisson and the negative binomial models we got, and use the maximum a posteriori (MAP) estimates.
+
+#### Poisson
+```{r}
+# empirical pmf
+len_emp <- epmf(he$unitLen)
+plot(len_emp, type = "o")
+
+# MAP 
+# poisson parameter
+set.seed(43)
+print(stan_poisson_length, pars=c("lambda"))
+
+# generate
+poisson_pos <- rpois(2200, 9.23)
+map_estimate(poisson_pos)
+
+plot(density(poisson_pos))
+abline(v = map_estimate(poisson_pos), col = "red")
+lines(len_emp, col = "blue")
+```
+#### NB
+```{r}
+# MAP 
+# NB parameter
+set.seed(43)
+print(stan_NB_length, pars=c("mu", "phi"))
+
+# generate
+NB_pos <- rnbinom(2200, size = 36.53, mu = 9.23) 
+map_estimate(NB_pos)
+
+plot(density(NB_pos), ylim = range(len_emp))
+abline(v = map_estimate(NB_pos), col = "red")
+lines(len_emp, col = "blue")
+
+# question: fluctuate a lot? close enough, generalised Poisson?
+```
+
+### Posterior predictive check for the joint model 
+
+#### place | length
+
+```{r}
+
+print(place_length_nb)
+```
+
+```{r}
+# seperate 
+generated_quantities <- extract(place_length_nb, pars = c("length_rep", "place_rep"))
+ppc_dens_overlay(he$unitLen, generated_quantities$length_rep[1:50,])
+ppc_dens_overlay(he$place, generated_quantities$place_rep[1:50,])
+
+```   
+
+#### generate quantities for place | length
+
+```{r}
+nb_lambda_he <- extract(place_length_nb, pars = c("lambda"))
+nb_phi_he <- extract(place_length_nb, pars = c("phi"))
+nb_mu_he <- extract(place_length_nb, pars = c("mu"))
+
+DataList <- vector("list", length = 4000)
+
+# iterate through 4000 times
+for (i in 1:4000) {
+  
+  # for each iteration creates a list
+  iterationList <- vector("list", length = 2200)
+  
+  # generate length
+  nb_length <- rnbinom(2200, size = nb_phi_he$phi[i], mu = nb_mu_he$mu[i])
+  nb_length0 <- nb_length[nb_length > 0]
+  diff1 <- (2200 - length(nb_length0))
+  
+  while (diff1 > 0) {
+    nb_length <- rnbinom(diff1, size = nb_phi_he$phi[i], mu = nb_mu_he$mu[i])
+    nb_length0 <- c(nb_length0, nb_length[nb_length > 0])
+    diff1 <- (2200 - length(nb_length0))
+  }
+  
+  # generate place
+  for (length_val in nb_length) {
+      
+    nb_place <- rpois(2200, nb_lambda_he$lambda[i])
+    nb_place0 <- nb_place[nb_place > 0 & nb_place < length_val]
+    diff <- (2200 - length(nb_place0))
+      
+    while (diff > 0) {
+      nb_place <- rpois(diff, nb_lambda_he$lambda[i])
+      nb_place0 <- c(nb_place0, nb_place[nb_place > 0 || nb_place < length_val])
+      diff <- (2200 - length(nb_place0))
+    }
+    iterationList[[length_val]] <- c(nb_place0)
+  }
+  DataList[[i]] <- iterationList
+}
+
+```
+
+## She
+
+### Load the data
+```{r}
+load("/Users/lu/Desktop/Winter_2023/sb corpus/sbc.Rdata")
+
+she <- sbc[sbc$transcript == "she", ]
+
+hist(she$unitLen)
+summary(she$unitLen)
+```
+
+```{r}
+unitlen_she <- she$unitLen
+place_she <- she$place
+
+she_data <- list(
+  N = 1094,
+  place = place_she,
+  unit_length = unitlen_she
+)
+
+place_length_nb_she <- stan(
+  file = "He_place|length_NB.stan",
+  data = she_data,
+  chain = 4
+)
+```
+
+
+## I
+```{r}
+I <- sbc[sbc$transcript == "I", ]
+
+hist(I$unitLen)
+summary(I$unitLen)
+```
+
+```{r}
+unitlen_I <- I$unitLen
+place_I <- I$place
+
+I_data <- list(
+  N = 8109,
+  place = place_I,
+  unit_length = unitlen_I
+)
+
+place_length_nb_I <- stan(
+  file = "He_place|length_NB.stan",
+  data = I_data,
+  chain = 4
+)
+
+```
+
+
+
