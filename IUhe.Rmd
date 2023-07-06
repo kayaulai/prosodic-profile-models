@@ -34,6 +34,8 @@ library("bayesplot")
 library("ggplot2")
 library("rstanarm")
 library(scatterplot3d)
+library(extraDistr)
+library(actuar)
 ```
 ## He
 
@@ -311,14 +313,14 @@ for (i in 1:4000) {
   # generate place
   for (length_val in nb_length) {
       
-    nb_place <- rpois(2200, nb_lambda_he$lambda[i])
+    nb_place <- rpois(1, nb_lambda_he$lambda[i])
     nb_place0 <- nb_place[nb_place > 0 & nb_place < length_val]
-    diff <- (2200 - length(nb_place0))
+    diff <- (1 - length(nb_place0))
       
     while (diff > 0) {
       nb_place <- rpois(diff, nb_lambda_he$lambda[i])
       nb_place0 <- c(nb_place0, nb_place[nb_place > 0 || nb_place < length_val])
-      diff <- (2200 - length(nb_place0))
+      diff <- (1 - length(nb_place0))
     }
     iterationList[[length_val]] <- c(nb_place0)
   }
@@ -326,6 +328,136 @@ for (i in 1:4000) {
 }
 
 ```
+
+
+```{r}
+nb_lambda_he <- extract(place_length_nb, pars = c("lambda"))
+nb_phi_he <- extract(place_length_nb, pars = c("phi"))
+nb_mu_he <- extract(place_length_nb, pars = c("mu"))
+
+he_final = data.frame()
+# iterate through 4000 times
+for (i in 1:4000) {
+  
+  
+  # generate length
+  nb_length <- rztnbinom(2200, size = nb_phi_he$phi[i], 
+                         prob = nb_phi_he$phi[i] / (nb_phi_he$phi[i] + nb_mu_he$mu[i]))
+  
+  nb_place <- c()
+  for (length_val in nb_length) {
+    nb_place <- c(nb_place, rtpois(1, nb_lambda_he$lambda[i], a = 0, b = length_val))
+
+  }
+  he_generated <- data.frame(nb_length, nb_place)
+  he_final <- rbind(he_final, he_generated)
+}
+
+```
+
+#### Visualization of he final
+
+```{r}
+all_df <- data.frame(nb_length = numeric(), nb_place = numeric(), n.x = numeric(), n.y = numeric())
+num_iterations <- nrow(he_final) / 2200
+
+for (i in 1:num_iterations) {
+  start_index <- (i - 1) * 2200 + 1
+  end_index <- i * 2200
+  
+  subset_data <- he_final[start_index:end_index, ] %>% group_by(nb_length, nb_place) %>% count
+  
+  subset <- subset_data[subset_data$nb_length < 15 & subset_data$nb_length > 1,]
+  result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+  
+  merged_df <- merge(subset, result, by = "nb_length")
+  
+  all_df <- rbind(all_df, merged_df)
+}
+
+group <- he[c("unitLen", "place")]
+colnames(group) <- c("nb_length", "nb_place")
+
+group <- group %>% group_by(nb_length, nb_place) %>% count
+subset <- group[group$nb_length < 15 & group$nb_length > 1,]
+result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+result <- merge(subset, result, by = "nb_length")
+
+p <- ggplot(data = all_df, aes(x = nb_place, y = n.x/n.y)) +
+    geom_point()
+  
+p + facet_grid(nb_length ~ .) + geom_point(data = result, color = "red") + facet_grid(nb_length ~ .)
+
+```
+
+
+### Poisson Poisson
+```{r}
+unitlen_data <- he$unitLen
+place_data <- he$place
+
+length_data <- list(
+  N = 2200,
+  place = place_data,
+  unit_length = unitlen_data
+)
+
+he_pois_pois <- stan(
+  file = "He_Pois_Pois.stan",
+  data = length_data,
+  chain = 4
+)
+```
+
+```{r}
+nb_lambda1_he <- extract(he_pois_pois, pars = c("lambda1"))
+nb_lambda2_he <- extract(he_pois_pois, pars = c("lambda2"))
+
+he_pois_final = data.frame()
+# iterate through 4000 times
+for (i in 1:2) {
+  
+  
+  # generate length
+  nb_length <- rtpois(2200, nb_lambda1_he$lambda1[i], a = 0)
+  
+  nb_place <- c()
+  for (length_val in nb_length) {
+    nb_place <- c(nb_place, rtpois(1, nb_lambda2_he$lambda2[i], a = 0, b = length_val))
+
+  }
+  he_generated <- data.frame(nb_length, nb_place)
+  he_pois_final <- rbind(he_pois_final, he_generated)
+}
+
+```
+
+```{r}
+hist(he$unitLen)
+hist(he_pois_final$nb_length[2200:4400])
+
+```
+
+### Generalzied Poisson 
+```{r}
+unitlen_he <- he$unitLen
+place_he <- he$place
+
+he_data <- list(
+  N = length(unitlen_he),
+  place = place_he,
+  unit_length = unitlen_he
+)
+
+he_genpois <- stan(
+  file = "gen_pois.stan",
+  data = he_data,
+  chain = 4
+)
+
+summary(he_genpois)
+```
+
 
 ## She
 
@@ -336,15 +468,17 @@ load("/Users/lu/Desktop/Winter_2023/sb corpus/sbc.Rdata")
 she <- sbc[sbc$transcript == "she", ]
 
 hist(she$unitLen)
+hist(he$unitLen)
 summary(she$unitLen)
 ```
 
+### stan model 
 ```{r}
 unitlen_she <- she$unitLen
 place_she <- she$place
 
 she_data <- list(
-  N = 1094,
+  N = length(she$unitLen),
   place = place_she,
   unit_length = unitlen_she
 )
@@ -355,13 +489,95 @@ place_length_nb_she <- stan(
   chain = 4
 )
 ```
+### generate quantities
 
+```{r}
+nb_lambda_she <- extract(place_length_nb_she, pars = c("lambda"))
+nb_phi_she <- extract(place_length_nb_she, pars = c("phi"))
+nb_mu_she <- extract(place_length_nb_she, pars = c("mu"))
+
+she_final = data.frame()
+# iterate through 4000 times
+for (i in 1:4000) {
+  
+  
+  # generate length
+  nb_length <- rztnbinom(length(she$unitLen), size = nb_phi_she$phi[i], 
+                         prob = nb_phi_she$phi[i] / (nb_phi_she$phi[i] + nb_mu_she$mu[i]))
+  
+  nb_place <- c()
+  for (length_val in nb_length) {
+    nb_place <- c(nb_place, rtpois(1, nb_lambda_she$lambda[i], a = 0, b = length_val))
+
+  }
+  she_generated <- data.frame(nb_length, nb_place)
+  she_final <- rbind(she_final, she_generated)
+}
+
+```
+
+### Visualization of he final
+
+```{r}
+all_df <- data.frame(nb_length = numeric(), nb_place = numeric(), n.x = numeric(), n.y = numeric())
+num_iterations <- nrow(she_final) / length(she$unitLen)
+
+for (i in 1:num_iterations) {
+  start_index <- (i - 1) * length(she$unitLen) + 1
+  end_index <- i * length(she$unitLen)
+  
+  subset_data <- she_final[start_index:end_index, ] %>% group_by(nb_length, nb_place) %>% count
+  
+  subset <- subset_data[subset_data$nb_length < 15 & subset_data$nb_length > 1,]
+  result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+  
+  merged_df <- merge(subset, result, by = "nb_length")
+  
+  all_df <- rbind(all_df, merged_df)
+}
+
+group <- she[c("unitLen", "place")]
+colnames(group) <- c("nb_length", "nb_place")
+
+group <- group %>% group_by(nb_length, nb_place) %>% count
+subset <- group[group$nb_length < 15 & group$nb_length > 1,]
+result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+result <- merge(subset, result, by = "nb_length")
+
+p <- ggplot(data = all_df, aes(x = nb_place, y = n.x/n.y)) +
+    geom_point()
+  
+p + facet_grid(nb_length ~ .) + geom_point(data = result, color = "red") + facet_grid(nb_length ~ .)
+
+```
+
+## They
+```{r}
+they <- sbc[sbc$transcript == "they", ]
+summary(they$unitLen)
+hist(they$unitLen)
+```
+
+```{r}
+unitlen_they <- they$unitLen
+place_they <- they$place
+
+they_data <- list(
+  N = length(unitlen_they),
+  place = place_they,
+  unit_length = unitlen_they
+)
+
+place_length_nb_they <- stan(
+  file = "He_place|length_NB.stan",
+  data = they_data,
+  chain = 4
+)
+```
 
 ## I
 ```{r}
 I <- sbc[sbc$transcript == "I", ]
-
-hist(I$unitLen)
 summary(I$unitLen)
 ```
 
@@ -384,4 +600,242 @@ place_length_nb_I <- stan(
 ```
 
 
+## Would
+
+### Load the data
+```{r}
+
+would <- sbc[sbc$transcript == "would", ]
+
+hist(would$unitLen)
+hist(he$unitLen)
+summary(would$unitLen)
+```
+
+### stan model 
+```{r}
+unitlen_would <- would$unitLen
+place_would <- would$place
+
+would_data <- list(
+  N = length(unitlen_would),
+  place = place_would,
+  unit_length = unitlen_would
+)
+
+place_length_nb_would <- stan(
+  file = "He_place|length_NB.stan",
+  data = would_data,
+  chain = 4
+)
+```
+
+### generate quantities
+
+```{r}
+nb_lambda_would <- extract(place_length_nb_would, pars = c("lambda"))
+nb_phi_would <- extract(place_length_nb_would, pars = c("phi"))
+nb_mu_would <- extract(place_length_nb_would, pars = c("mu"))
+
+would_final = data.frame()
+# iterate through 4000 times
+for (i in 1:4000) {
+  
+  
+  # generate length
+  nb_length <- rztnbinom(length(unitlen_would), size = nb_phi_would$phi[i], 
+                         prob = nb_phi_would$phi[i] / (nb_phi_would$phi[i] + nb_mu_would$mu[i]))
+  
+  nb_place <- c()
+  for (length_val in nb_length) {
+    nb_place <- c(nb_place, rtpois(1, nb_lambda_would$lambda[i], a = 0, b = length_val))
+
+  }
+  would_generated <- data.frame(nb_length, nb_place)
+  would_final <- rbind(would_final, would_generated)
+}
+
+```
+
+### Visualization of would final
+
+```{r}
+all_df <- data.frame(nb_length = numeric(), nb_place = numeric(), n.x = numeric(), n.y = numeric())
+num_iterations <- nrow(would_final) / length(unitlen_would)
+
+for (i in 1:num_iterations) {
+  start_index <- (i - 1) * length(unitlen_would) + 1
+  end_index <- i * length(unitlen_would)
+  
+  subset_data <- would_final[start_index:end_index, ] %>% group_by(nb_length, nb_place) %>% count
+  
+  subset <- subset_data[subset_data$nb_length < 15 & subset_data$nb_length > 1,]
+  result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+  
+  merged_df <- merge(subset, result, by = "nb_length")
+  
+  all_df <- rbind(all_df, merged_df)
+}
+
+group <- would[c("unitLen", "place")]
+colnames(group) <- c("nb_length", "nb_place")
+
+group <- group %>% group_by(nb_length, nb_place) %>% count
+subset <- group[group$nb_length < 15 & group$nb_length > 1,]
+result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+result <- merge(subset, result, by = "nb_length")
+
+p <- ggplot(data = all_df, aes(x = nb_place, y = n.x/n.y)) +
+    geom_point()
+  
+p + facet_grid(nb_length ~ .) + geom_point(data = result, color = "red") + facet_grid(nb_length ~ .)
+
+```
+
+## an
+### Load the data
+```{r}
+an <- sbc[sbc$transcript == "an", ]
+
+hist(an$unitLen)
+hist(he$unitLen)
+summary(an$unitLen)
+```
+
+### stan model 
+```{r}
+unitlen_an <- an$unitLen
+place_an <- an$unitLen - an$place + t(rep(1, length(unitlen_an)))
+
+an_data <- list(
+  N = length(unitlen_an),
+  place = place_an,
+  unit_length = unitlen_an
+)
+
+place_length_nb_an <- stan(
+  file = "He_place|length_NB.stan",
+  data = an_data,
+  chain = 4
+)
+
+```
+
+### generate quantities
+
+```{r}
+nb_lambda_an <- extract(place_length_nb_an, pars = c("lambda"))
+nb_phi_an <- extract(place_length_nb_an, pars = c("phi"))
+nb_mu_an <- extract(place_length_nb_an, pars = c("mu"))
+
+an_final = data.frame()
+# iterate through 4000 times
+for (i in 1:4000) {
+  
+  
+  # generate length
+  nb_length <- rztnbinom(length(unitlen_an), size = nb_phi_an$phi[i], 
+                         prob = nb_phi_an$phi[i] / (nb_phi_an$phi[i] + nb_mu_an$mu[i]))
+  
+  nb_place <- c()
+  for (length_val in nb_length) {
+    nb_place <- c(nb_place, rtpois(1, nb_lambda_an$lambda[i], a = 0, b = length_val))
+
+  }
+  an_generated <- data.frame(nb_length, nb_place)
+  an_final <- rbind(an_final, an_generated)
+}
+
+```
+
+### Visualization of an final
+```{r}
+all_df <- data.frame(nb_length = numeric(), nb_place = numeric(), n.x = numeric(), n.y = numeric())
+num_iterations <- nrow(an_final) / length(unitlen_an)
+
+for (i in 1:num_iterations) {
+  start_index <- (i - 1) * length(unitlen_an) + 1
+  end_index <- i * length(unitlen_an)
+  
+  subset_data <- an_final[start_index:end_index, ] %>% group_by(nb_length, nb_place) %>% count
+  
+  subset <- subset_data[subset_data$nb_length < 15 & subset_data$nb_length > 1,]
+  result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+  
+  merged_df <- merge(subset, result, by = "nb_length")
+  
+  all_df <- rbind(all_df, merged_df)
+}
+
+group <- an[c("unitLen", "place")]
+colnames(group) <- c("nb_length", "nb_place")
+
+group <- group %>% group_by(nb_length, nb_place) %>% count
+subset <- group[group$nb_length < 15 & group$nb_length > 1,]
+result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+result <- merge(subset, result, by = "nb_length")
+
+p <- ggplot(data = all_df, aes(x = nb_place, y = n.x/n.y)) +
+    geom_point()
+  
+p + facet_grid(nb_length ~ .) + geom_point(data = result, color = "red") + facet_grid(nb_length ~ .)
+
+```
+
+### WAIC
+```{r}
+library(flexmix)
+map_estimates <- map_estimate(place_length_nb_an)[1:3,]
+
+nb_length <- rztnbinom(length(unitlen_an), size = map_estimates[3,2],
+                        prob = map_estimates[3,2] / (map_estimates[3,2] + map_estimates[2,2]))
+  
+nb_place <- c()
+
+for (length_val in nb_length) {
+  nb_place <- c(nb_place, rtpois(1, map_estimates[1,2], a = 0, b = length_val))
+}
+
+an_sample <- data.frame(nb_length, nb_place)
+
+group_sample <- an_sample %>% group_by(nb_length, nb_place) %>% count
+
+result_sample <- aggregate(n ~ nb_length, data = group_sample, FUN = sum)
+result_sample <- merge(group_sample, result_sample, by = "nb_length")
+
+result_sample["prob"] = result_sample$n.x/result_sample$n.y
+
+group <- an[c("unitLen", "place")]
+colnames(group) <- c("nb_length", "nb_place")
+group_real <- group %>% group_by(nb_length, nb_place) %>% count
+
+result_real <- aggregate(n ~ nb_length, data = group_real, FUN = sum)
+result_real <- merge(group_real, result_real, by = "nb_length")
+
+result_real["prob"] = result_real$n.x/result_real$n.y
+```
+
+
+```{r}
+library(philentropy)
+library(dplyr)
+length_unique <- unique(result_real$nb_length)
+
+KLD <- data.frame()
+for (length in length_unique) {
+  result_real1 <- rep(result_real[result_real$nb_length == length, ]$nb_place, result_real[result_real$nb_length == length, ]$n.x)
+  result_sample1 <- rep(result_sample[result_sample$nb_length == length, ]$nb_place, result_sample[result_sample$nb_length == length, ]$n.x)
+  
+  KL <- data.frame(length, KL(rbind(result_real1,result_sample1), est.prob = "empirical"))
+  colnames(KL) <- c("length", "KLD")
+  KLD <- rbind(KLD, KL)
+  
+}
+
+  print(length)
+  print(KL(rbind(result_real1,result_sample1), est.prob = "empirical"))
+an_final = data.frame()
+# iterate through 4000 times
+
+```
 
