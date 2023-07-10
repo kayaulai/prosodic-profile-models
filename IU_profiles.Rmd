@@ -1,0 +1,86 @@
+---
+title: "IU length for various words"
+author: "Lu Liu, Haoran Yan & Ryan Ka Yau Lai"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, echo=FALSE}
+library(knitr)
+# set global chunk options: images will be 7x5 inches
+knitr::opts_chunk$set(fig.width=7, fig.height=5)
+options(digits = 4)
+```
+
+```{r, include=FALSE}
+# for debugging latex
+options(tinytex.verbose = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(rstan)
+library(tidyr)
+```
+
+# Getting started
+
+```{r}
+#load("/Users/lu/Desktop/Winter_2023/sb corpus/sbc.Rdata")
+load("G:\\共用雲端硬碟\\Prosody & Units in Dialogue\\Staircases\\reorganised_code\\sbc.Rdata")
+```
+
+Get SBC data ready:
+```{r}
+sbc <- sbc %>%
+  group_by(docId, unitId) %>%
+  mutate(unitLenWords = suppressWarnings(max(place, na.rm = T))) %>%
+  ungroup
+```
+
+# Implementing the model
+
+Function for getting the NegBin / Poisson models:
+```{r}
+getModel = function(word, back = F){
+  data_raw <- sbc %>%
+    filter(tolower(text) == word) %>%
+    filter(!is.na(place))
+  
+  if(!back){
+    data_input <- list(
+      N = nrow(data_raw),
+      place = pull(data_raw, place),
+      unit_length = pull(data_raw, unitWordLen)
+    )
+  } else {
+    data_input <- list(
+      N = nrow(data_raw),
+      place = pull(data_raw, unitWordLen) - pull(data_raw, place) + 1,
+      unit_length = pull(data_raw, unitWordLen)
+    )
+  }
+
+  stan(
+    file = "He_place_given_length_NB.stan",
+    data = data_input,
+    chain = 4,
+    cores = getOption("mc.cores", 4)
+  )
+}
+```
+
+Implementing the models:
+```{r}
+#the, little, an, just, would, he
+model_negbin_pois_the = getModel("the", back = T)
+model_negbin_pois_little = getModel("little", back = T)
+model_negbin_pois_an = getModel("an", back = T)
+model_negbin_pois_just = getModel("just")
+model_negbin_pois_would = getModel("would")
+model_negbin_pois_he = getModel("he")
+```
+
