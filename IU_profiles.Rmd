@@ -77,10 +77,28 @@ Implementing the models:
 ```{r}
 #the, little, an, just, would, he
 model_negbin_pois_the = getModel("the", back = T)
+model_negbin_pois_right = getModel("right", back = T)
 model_negbin_pois_little = getModel("little", back = T)
 model_negbin_pois_an = getModel("an", back = T)
 model_negbin_pois_just = getModel("just")
 model_negbin_pois_would = getModel("would")
 model_negbin_pois_he = getModel("he")
+model_negbin_pois_yes = getModel("yes")
+```
+
+```{r}
+getVar = function(model){
+  extracted = extract(model)
+  mean(extracted$mu * (1 + extracted$mu / extracted$phi))
+}
+getVar(model_negbin_pois_the)
+getVar(model_negbin_pois_right)
+getVar(model_negbin_pois_little)
+getVar(model_negbin_pois_an)
+getVar(model_negbin_pois_just)
+getVar(model_negbin_pois_would) 
+getVar(model_negbin_pois_he)
+getVar(model_negbin_pois_yes)
+
 ```
 
