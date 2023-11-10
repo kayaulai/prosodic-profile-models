@@ -1,0 +1,316 @@
+---
+title: "IU length for various words"
+author: "Lu Liu, Haoran Yan & Ryan Ka Yau Lai"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, echo=FALSE}
+library(knitr)
+# set global chunk options: images will be 7x5 inches
+knitr::opts_chunk$set(fig.width=7, fig.height=5)
+options(digits = 4)
+```
+
+```{r, include=FALSE}
+# for debugging latex
+options(tinytex.verbose = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(rstan)
+library(tidyr)
+library(HMMpa)
+```
+
+# Getting started
+
+```{r}
+load("/Users/lu/Desktop/Winter_2023/sb corpus/sbc.Rdata")
+#load("G:\\共用雲端硬碟\\Prosody & Units in Dialogue\\Staircases\\reorganised_code\\sbc.Rdata")
+```
+
+Get SBC data ready:
+```{r}
+sbc <- sbc %>%
+  group_by(docId, unitId) %>%
+  mutate(unitLenWords = suppressWarnings(max(place, na.rm = T))) %>%
+  ungroup
+```
+
+## Implementing the model
+
+Function for getting the NegBin / Poisson models:
+```{r}
+getModel = function(word, back = F){
+  data_raw <- sbc %>%
+    filter(tolower(text) == word) %>%
+    filter(!is.na(place))
+  
+  if(!back){
+    data_input <- list(
+      N = nrow(data_raw),
+      place = pull(data_raw, place),
+      unit_length = pull(data_raw, unitWordLen)
+    )
+  } else {
+    data_input <- list(
+      N = nrow(data_raw),
+      place = pull(data_raw, unitWordLen) - pull(data_raw, place) + 1,
+      unit_length = pull(data_raw, unitWordLen)
+    )
+  }
+
+  stan(
+    file = "He_place_given_length_NB.stan",
+    data = data_input,
+    chain = 4,
+    cores = getOption("mc.cores", 4)
+  )
+}
+```
+
+Implementing the models:
+```{r}
+#the, little, an, just, would, he
+model_negbin_pois_the = getModel("the", back = T)
+model_negbin_pois_right = getModel("right", back = T)
+model_negbin_pois_little = getModel("little", back = T)
+model_negbin_pois_an = getModel("an", back = T)
+model_negbin_pois_just = getModel("just")
+model_negbin_pois_would = getModel("would")
+model_negbin_pois_he = getModel("he")
+model_negbin_pois_yes = getModel("yes")
+```
+
+```{r}
+getVar = function(model){
+  extracted = extract(model)
+  mean(extracted$mu * (1 + extracted$mu / extracted$phi))
+}
+getVar(model_negbin_pois_the)
+getVar(model_negbin_pois_right)
+getVar(model_negbin_pois_little)
+getVar(model_negbin_pois_an)
+getVar(model_negbin_pois_just)
+getVar(model_negbin_pois_would) 
+getVar(model_negbin_pois_he)
+getVar(model_negbin_pois_yes)
+
+```
+
+
+```{r}
+
+sbc$place_minus_1 = sbc$place - 1
+
+sbc$length_minus_1 = sbc$unitWordLen - 1
+
+
+```
+
+
+## Generalized Poisson
+
+```{r}
+getModel = function(word, file_path, back = F){
+  data_raw <- sbc %>%
+    filter(tolower(text) == word) %>%
+    filter(!is.na(place))
+  
+  if(!back){
+    data_input <- list(
+      N = nrow(data_raw),
+      place = pull(data_raw, place_minus_1),
+      unit_length = pull(data_raw, length_minus_1)
+    )
+  } else {
+    data_input <- list(
+      N = nrow(data_raw),
+      place = pull(data_raw, unitWordLen) - pull(data_raw, place) + 1,
+      unit_length = pull(data_raw, unitWordLen)
+    )
+  }
+
+  stan(
+    file = file_path,
+    data = data_input,
+    chain = 4,
+    cores = getOption("mc.cores", 4)
+  )
+}
+```
+
+```{r}
+gen_pois_he = getModel("he", "Stan/gen_pois.stan", back = F)
+
+```
+
+
+```{r}
+he <- sbc %>%
+  filter(tolower(text) == 'he') %>%
+  filter(!is.na(place))
+
+```
+
+#### generate quantities
+```{r}
+nb_theta_he$theta1
+nb_theta_he <- extract(gen_pois_he, pars = c("theta1"))
+nb_lambda_he <- extract(gen_pois_he, pars = c("lambda1"))
+nb_phi_he <- extract(gen_pois_he, pars = c("phi"))
+nb_mu_he <- extract(gen_pois_he, pars = c("mu"))
+
+he_final = data.frame()
+# iterate through 4000 times
+for (i in 1:100) {
+  
+  
+  # generate length
+  nb_length <- rnbinom(length(he$length_minus_1), size = nb_phi_he$phi[i], 
+                         prob = nb_phi_he$phi[i] / (nb_phi_he$phi[i] + nb_mu_he$mu[i]))
+  
+  nb_place <- c()
+  for (length_val in nb_length) {
+    nb_place <- c(nb_place, rgenpois(length(he$place_minus_1), nb_theta_he$theta1[i], nb_lambda_he$lambda1[i]))
+
+  }
+  he_generated <- data.frame(nb_length, nb_place)
+  he_final <- rbind(he_final, he_generated)
+}
+
+```
+
+#### Visualization
+
+```{r}
+
+all_df <- data.frame(nb_length = numeric(), nb_place = numeric(), n.x = numeric(), n.y = numeric())
+num_iterations <- nrow(he_final) / length(he$unitWordLen)
+
+for (i in 1:num_iterations) {
+  start_index <- (i - 1) * length(he$unitWordLen) + 1
+  end_index <- i * length(he$unitWordLen)
+  
+  subset_data <- he_final[start_index:end_index, ] %>% group_by(nb_length, nb_place) %>% count
+  
+  subset <- subset_data[subset_data$nb_length < 15 & subset_data$nb_length > 1,]
+  result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+  
+  merged_df <- merge(subset, result, by = "nb_length")
+  
+  all_df <- rbind(all_df, merged_df)
+}
+
+group <- he[c("unitWordLen", "place")]
+colnames(group) <- c("nb_length", "nb_place")
+
+group <- group %>% group_by(nb_length, nb_place) %>% count
+subset <- group[group$nb_length < 15 & group$nb_length > 1,]
+result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+result <- merge(subset, result, by = "nb_length")
+
+
+```
+
+```{r}
+p <- ggplot(data = all_df, aes(x = nb_place, y = n.x/n.y)) +
+    geom_point()
+  
+p + facet_grid(nb_length ~ .) + geom_point(data = result, color = "red") + facet_grid(nb_length ~ .)
+
+
+```
+
+
+```{r}
+
+p <- ggplot(data = all_df, aes(x = nb_place, y = n.x/n.y)) +
+    geom_point(alpha = .015, position = "jitter")
+    
+p + facet_wrap("nb_length") + geom_point(data = result %>% filter(nb_length <= 14), color = "red") + facet_wrap("nb_length")
+
+```
+
+## Hurdle model
+
+
+```{r}
+
+gen_pois_he_hurdle = getModel("he", "Stan/gen_pois_hurdle.stan", back = F)
+
+
+```
+
+#### generate quantities
+```{r}
+
+nb_theta_he <- extract(gen_pois_he_hurdle, pars = c("theta1"))
+nb_lambda_he <- extract(gen_pois_he_hurdle, pars = c("lambda1"))
+nb_phi_he <- extract(gen_pois_he_hurdle, pars = c("phi"))
+nb_mu_he <- extract(gen_pois_he_hurdle, pars = c("mu"))
+
+he_final = data.frame()
+# iterate through 4000 times
+for (i in 1:1) {
+  
+  
+  # generate length
+  nb_length <- rnbinom(length(he$length_minus_1), size = nb_phi_he$phi[i], 
+                         prob = nb_phi_he$phi[i] / (nb_phi_he$phi[i] + nb_mu_he$mu[i]))
+  
+  nb_place <- c()
+  for (length_val in nb_length) {
+    nb_place <- c(nb_place, rgenpois(length(he$place_minus_1), nb_theta_he$theta1[i], nb_lambda_he$lambda1[i]))
+
+  }
+  he_generated <- data.frame(nb_length, nb_place)
+  he_final <- rbind(he_final, he_generated)
+}
+
+```
+
+```{r}
+
+all_df <- data.frame(nb_length = numeric(), nb_place = numeric(), n.x = numeric(), n.y = numeric())
+num_iterations <- nrow(he_final) / length(he$unitWordLen)
+
+for (i in 1:num_iterations) {
+  start_index <- (i - 1) * length(he$unitWordLen) + 1
+  end_index <- i * length(he$unitWordLen)
+  
+  subset_data <- he_final[start_index:end_index, ] %>% group_by(nb_length, nb_place) %>% count
+  
+  subset <- subset_data[subset_data$nb_length < 15 & subset_data$nb_length > 1,]
+  result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+  
+  merged_df <- merge(subset, result, by = "nb_length")
+  
+  all_df <- rbind(all_df, merged_df)
+}
+
+group <- he[c("unitWordLen", "place")]
+colnames(group) <- c("nb_length", "nb_place")
+
+group <- group %>% group_by(nb_length, nb_place) %>% count
+subset <- group[group$nb_length < 15 & group$nb_length > 1,]
+result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+result <- merge(subset, result, by = "nb_length")
+
+```
+
+```{r}
+
+p <- ggplot(data = all_df, aes(x = nb_place, y = n.x/n.y)) +
+    geom_point()
+  
+p + facet_grid(nb_length ~ .) + geom_point(data = result, color = "red") + facet_grid(nb_length ~ .)
+
+```
+
+

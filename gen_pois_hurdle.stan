@@ -15,6 +15,7 @@ parameters {
   real<lower = -1, upper = 1> lambda1;
   real<lower = 0> mu; 
   real<lower = 0> phi;
+  real<lower = 0, upper = 1> psi;  // Probability of observing 0
 }
 
 transformed parameters {
@@ -27,10 +28,14 @@ transformed parameters {
 
 model {
   for (i in 1:N) {
+    if (place[i] == 0) {
+      target += log(psi);
+    } 
+    else {
+      target += log(1 - psi);
+    }
     target += neg_binomial_2_lpmf(unit_length[i] | mu, phi);
     target += genpoiss_lpmf(place[i] | theta1, lambda1); // Modeling unit_length variable
   }
-  
 }
-
 
