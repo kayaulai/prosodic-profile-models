@@ -1,0 +1,44 @@
+functions {
+  real genpoiss_truncated_lpmf(int y, real theta, real lambda, int truncation) {
+    
+    if (y > truncation) {
+      print("y > truncation! y =", y, " truncation =", truncation);
+      return -1000; // Probability is zero outside the truncation
+    }
+    if ((theta * pow(theta + lambda * y, y-1) * exp(-theta - lambda * y)) / tgamma(y + 1) == 0) {
+      print("lambda * y", lambda * y);
+      print("pow", pow(theta + lambda * y, y-1), "exp", exp(-theta - lambda * y), "tgamma", tgamma(y + 1));
+      print("product", theta * pow(theta + lambda * y, y-1) * exp(-theta - lambda * y));
+      return -1000;
+    }
+    return log((theta * pow(theta + lambda * y, y-1) * exp(-theta - lambda * y)) / tgamma(y + 1));
+  }
+}
+data {
+  int<lower=1> N;  // total number of observations
+  int place[N];  
+  int unit_length[N];
+}
+parameters {
+  real<lower = 0> theta1;
+  real<lower = -1, upper = 1> lambda1;
+  real<lower = 0> mu; 
+  real<lower = 0> phi;
+}
+transformed parameters {
+  real lprior = 0;
+  lprior += gamma_lpdf(theta1 | 2, 0.5); 
+  lprior += gamma_lpdf(lambda1 | 1, 1);
+  lprior += gamma_lpdf(mu | 1, 1);
+  lprior += gamma_lpdf(phi | 1, 1);
+}
+model {
+  print("theta1", theta1);
+  for (i in 1:N) {
+    target += neg_binomial_2_lpmf(unit_length[i] | mu, phi);
+    target += genpoiss_truncated_lpmf(place[i] | theta1, lambda1, unit_length[i]); // Modeling unit_length variable
+  }
+  
+}
+
+
