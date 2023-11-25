@@ -104,17 +104,21 @@ getVar(model_negbin_pois_yes)
 ```
 
 
+
+
+
+
+
+
+
 ```{r}
 
 sbc$place_minus_1 = sbc$place - 1
 
 sbc$length_minus_1 = sbc$unitWordLen - 1
 
-
 ```
 
-
-## Generalized Poisson
 
 ```{r}
 getModel = function(word, file_path, back = F){
@@ -143,10 +147,14 @@ getModel = function(word, file_path, back = F){
     cores = getOption("mc.cores", 4)
   )
 }
+
 ```
+## Normal Poisson
 
 ```{r}
-gen_pois_he = getModel("he", "Stan/gen_pois.stan", back = F)
+pois_he = getModel("he", "Stan/He_place_given_length_NB.stan", back = F)
+
+
 
 ```
 
@@ -160,15 +168,13 @@ he <- sbc %>%
 
 #### generate quantities
 ```{r}
-nb_theta_he$theta1
-nb_theta_he <- extract(gen_pois_he, pars = c("theta1"))
-nb_lambda_he <- extract(gen_pois_he, pars = c("lambda1"))
-nb_phi_he <- extract(gen_pois_he, pars = c("phi"))
-nb_mu_he <- extract(gen_pois_he, pars = c("mu"))
+nb_lambda_he <- extract(pois_he, pars = c("lambda"))
+nb_phi_he <- extract(pois_he, pars = c("phi"))
+nb_mu_he <- extract(pois_he, pars = c("mu"))
 
 he_final = data.frame()
 # iterate through 4000 times
-for (i in 1:100) {
+for (i in 1:1000) {
   
   
   # generate length
@@ -177,7 +183,98 @@ for (i in 1:100) {
   
   nb_place <- c()
   for (length_val in nb_length) {
-    nb_place <- c(nb_place, rgenpois(length(he$place_minus_1), nb_theta_he$theta1[i], nb_lambda_he$lambda1[i]))
+    nb_place <- c(nb_place, rpois(1, nb_lambda_he$lambda[i]))
+
+  }
+  he_generated <- data.frame(nb_length, nb_place)
+  he_final <- rbind(he_final, he_generated)
+}
+
+```
+
+#### Visualization
+
+```{r}
+
+all_df <- data.frame(nb_length = numeric(), nb_place = numeric(), n.x = numeric(), n.y = numeric())
+num_iterations <- nrow(he_final) / length(he$unitWordLen)
+
+for (i in 1:num_iterations) {
+  start_index <- (i - 1) * length(he$unitWordLen) + 1
+  end_index <- i * length(he$unitWordLen)
+  
+  subset_data <- he_final[start_index:end_index, ] %>% group_by(nb_length, nb_place) %>% count
+  
+  subset <- subset_data[subset_data$nb_length < 15 & subset_data$nb_length >= 1,]
+  result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+  
+  merged_df <- merge(subset, result, by = "nb_length")
+  
+  all_df <- rbind(all_df, merged_df)
+}
+
+group <- he[c("unitWordLen", "place")]
+colnames(group) <- c("nb_length", "nb_place")
+
+group <- group %>% group_by(nb_length, nb_place) %>% count
+subset <- group[group$nb_length < 15 & group$nb_length > 1,]
+result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+result <- merge(subset, result, by = "nb_length")
+
+
+```
+
+
+```{r fig.height=400, fig.width=500}
+
+p <- ggplot(data = all_df, aes(x = nb_place, y = n.x/n.y)) +
+    geom_point(alpha = .015, position = "jitter")
+    
+p <- p + facet_wrap("nb_length") + geom_point(data = result %>% filter(nb_length <= 14), color = "red") + facet_wrap("nb_length")
+
+```
+
+
+
+
+## Generalized Poisson
+
+```{r}
+gen_pois_he = getModel("he", "Stan/gen_pois.stan", back = F)
+
+```
+
+```{r}
+gen_pois_he
+```
+
+
+```{r}
+he <- sbc %>%
+  filter(tolower(text) == 'he') %>%
+  filter(!is.na(place))
+
+```
+
+#### generate quantities
+```{r}
+nb_theta_he <- extract(gen_pois_he, pars = c("theta1"))
+nb_lambda_he <- extract(gen_pois_he, pars = c("lambda1"))
+nb_phi_he <- extract(gen_pois_he, pars = c("phi"))
+nb_mu_he <- extract(gen_pois_he, pars = c("mu"))
+
+he_final = data.frame()
+# iterate through 4000 times
+for (i in 1:1000) {
+  
+  
+  # generate length
+  nb_length <- rnbinom(length(he$length_minus_1), size = nb_phi_he$phi[i], 
+                         prob = nb_phi_he$phi[i] / (nb_phi_he$phi[i] + nb_mu_he$mu[i]))
+  
+  nb_place <- c()
+  for (length_val in nb_length) {
+    nb_place <- c(nb_place, rgenpois(1, nb_theta_he$theta1[i], nb_lambda_he$lambda1[i]))
 
   }
   he_generated <- data.frame(nb_length, nb_place)
@@ -218,22 +315,14 @@ result <- merge(subset, result, by = "nb_length")
 
 ```
 
-```{r}
-p <- ggplot(data = all_df, aes(x = nb_place, y = n.x/n.y)) +
-    geom_point()
-  
-p + facet_grid(nb_length ~ .) + geom_point(data = result, color = "red") + facet_grid(nb_length ~ .)
 
 
-```
-
-
-```{r}
+```{r fig.height=400, fig.width=500}
 
 p <- ggplot(data = all_df, aes(x = nb_place, y = n.x/n.y)) +
     geom_point(alpha = .015, position = "jitter")
     
-p + facet_wrap("nb_length") + geom_point(data = result %>% filter(nb_length <= 14), color = "red") + facet_wrap("nb_length")
+p <- p + facet_wrap("nb_length") + geom_point(data = result %>% filter(nb_length <= 14), color = "red") + facet_wrap("nb_length")
 
 ```
 
@@ -242,22 +331,190 @@ p + facet_wrap("nb_length") + geom_point(data = result %>% filter(nb_length <= 1
 
 ```{r}
 
-gen_pois_he_hurdle = getModel("he", "Stan/gen_pois_hurdle.stan", back = F)
+gen_pois_s_hurdle = getModel("'s", "Stan/gen_pois_hurdle.stan", back = F)
 
-
+s <- sbc %>%
+  filter(tolower(text) == "'s") %>%
+  filter(!is.na(place))
 ```
 
 #### generate quantities
 ```{r}
 
-nb_theta_he <- extract(gen_pois_he_hurdle, pars = c("theta1"))
-nb_lambda_he <- extract(gen_pois_he_hurdle, pars = c("lambda1"))
-nb_phi_he <- extract(gen_pois_he_hurdle, pars = c("phi"))
-nb_mu_he <- extract(gen_pois_he_hurdle, pars = c("mu"))
+nb_theta_s <- extract(gen_pois_s_hurdle, pars = c("theta1"))
+nb_lambda_s <- extract(gen_pois_s_hurdle, pars = c("lambda1"))
+nb_phi_s <- extract(gen_pois_s_hurdle, pars = c("phi"))
+nb_mu_s <- extract(gen_pois_s_hurdle, pars = c("mu"))
+
+s_final = data.frame()
+# iterate through 4000 times
+for (i in 1:1000) {
+  
+  
+  # generate length
+  nb_length <- rnbinom(length(s$length_minus_1), size = nb_phi_s$phi[i], 
+                         prob = nb_phi_s$phi[i] / (nb_phi_s$phi[i] + nb_mu_s$mu[i]))
+  
+  nb_place <- c()
+  for (length_val in nb_length) {
+    nb_place <- c(nb_place, rgenpois(1, nb_theta_s$theta1[i], nb_lambda_s$lambda1[i]))
+
+  }
+  s_generated <- data.frame(nb_length, nb_place)
+  s_final <- rbind(s_final, s_generated)
+}
+
+```
+
+
+```{r}
+
+all_df <- data.frame(nb_length = numeric(), nb_place = numeric(), n.x = numeric(), n.y = numeric())
+num_iterations <- nrow(s_final) / length(s$unitWordLen)
+
+for (i in 1:num_iterations) {
+  start_index <- (i - 1) * length(s$unitWordLen) + 1
+  end_index <- i * length(he$unitWordLen)
+  
+  subset_data <- s_final[start_index:end_index, ] %>% group_by(nb_length, nb_place) %>% count
+  
+  subset <- subset_data[subset_data$nb_length < 15 & subset_data$nb_length > 1,]
+  result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+  
+  merged_df <- merge(subset, result, by = "nb_length")
+  
+  all_df <- rbind(all_df, merged_df)
+}
+
+group <- s[c("unitWordLen", "place")]
+colnames(group) <- c("nb_length", "nb_place")
+
+group <- group %>% group_by(nb_length, nb_place) %>% count
+subset <- group[group$nb_length < 15 & group$nb_length > 1,]
+result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+result <- merge(subset, result, by = "nb_length")
+
+```
+
+```{r fig.height=400, fig.width=500}
+
+p <- ggplot(data = all_df, aes(x = nb_place, y = n.x/n.y)) +
+    geom_point(alpha = .015, position = "jitter")
+    
+p <- p + facet_wrap("nb_length") + geom_point(data = result %>% filter(nb_length <= 14), color = "red") + facet_wrap("nb_length")
+
+```
+
+
+
+## Hurdle model
+
+
+```{r}
+
+gen_pois_me_hurdle = getModel("me", "Stan/gen_pois_hurdle.stan", back = T)
+
+me <- sbc %>%
+  filter(tolower(text) == "me") %>%
+  filter(!is.na(place))
+```
+
+#### generate quantities
+```{r}
+
+nb_theta_me <- extract(gen_pois_me_hurdle, pars = c("theta1"))
+nb_lambda_me <- extract(gen_pois_me_hurdle, pars = c("lambda1"))
+nb_phi_me <- extract(gen_pois_me_hurdle, pars = c("phi"))
+nb_mu_me <- extract(gen_pois_me_hurdle, pars = c("mu"))
+
+me_final = data.frame()
+# iterate through 4000 times
+for (i in 1:1000) {
+  
+  
+  # generate length
+  nb_length <- rnbinom(length(me$length_minus_1), size = nb_phi_me$phi[i], 
+                         prob = nb_phi_me$phi[i] / (nb_phi_me$phi[i] + nb_mu_me$mu[i]))
+  
+  nb_place <- c()
+  for (length_val in nb_length) {
+    nb_place <- c(nb_place, rgenpois(1, nb_theta_me$theta1[i], nb_lambda_me$lambda1[i]))
+
+  }
+  me_generated <- data.frame(nb_length, nb_place)
+  me_final <- rbind(me_final, me_generated)
+}
+
+```
+
+```{r}
+
+all_df <- data.frame(nb_length = numeric(), nb_place = numeric(), n.x = numeric(), n.y = numeric())
+num_iterations <- nrow(me_final) / length(me$unitWordLen)
+
+for (i in 1:num_iterations) {
+  start_index <- (i - 1) * length(s$unitWordLen) + 1
+  end_index <- i * length(he$unitWordLen)
+  
+  subset_data <- me_final[start_index:end_index, ] %>% group_by(nb_length, nb_place) %>% count
+  
+  subset <- subset_data[subset_data$nb_length < 15 & subset_data$nb_length > 1,]
+  result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+  
+  merged_df <- merge(subset, result, by = "nb_length")
+  
+  all_df <- rbind(all_df, merged_df)
+}
+
+group <- me[c("unitWordLen", "place")]
+colnames(group) <- c("nb_length", "nb_place")
+
+group <- group %>% group_by(nb_length, nb_place) %>% count
+subset <- group[group$nb_length < 15 & group$nb_length > 1,]
+result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+result <- merge(subset, result, by = "nb_length")
+
+```
+
+```{r fig.height=400, fig.width=500}
+
+p <- ggplot(data = all_df, aes(x = nb_place, y = n.x/n.y)) +
+    geom_point(alpha = .015, position = "jitter")
+    
+p + facet_wrap("nb_length") + geom_point(data = result %>% filter(nb_length <= 14), color = "red") + facet_wrap("nb_length")
+
+```
+
+```{r}
+log(2.14257e-214)
+
+```
+
+
+# Generalized Poisson
+
+```{r}
+pois_he = getModel("he", "Stan/gen_pois.stan", back = F)
+#getModel("he", "Stan/He_Pois_Pois.stan", back = F)
+```
+
+```{r}
+gen_pois_he
+```
+
+```{r}
+pois_he
+```
+#### generate quantities
+```{r}
+nb_theta_he <- extract(pois_he, pars = c("theta1"))
+nb_lambda_he <- extract(pois_he, pars = c("lambda1"))
+nb_phi_he <- extract(pois_he, pars = c("phi"))
+nb_mu_he <- extract(pois_he, pars = c("mu"))
 
 he_final = data.frame()
 # iterate through 4000 times
-for (i in 1:1) {
+for (i in 1:1000) {
   
   
   # generate length
@@ -266,7 +523,7 @@ for (i in 1:1) {
   
   nb_place <- c()
   for (length_val in nb_length) {
-    nb_place <- c(nb_place, rgenpois(length(he$place_minus_1), nb_theta_he$theta1[i], nb_lambda_he$lambda1[i]))
+    nb_place <- c(nb_place, rgenpois(1, nb_theta_he$theta1[i], nb_lambda_he$lambda1[i]))
 
   }
   he_generated <- data.frame(nb_length, nb_place)
@@ -274,6 +531,8 @@ for (i in 1:1) {
 }
 
 ```
+
+#### Visualization
 
 ```{r}
 
@@ -302,15 +561,16 @@ subset <- group[group$nb_length < 15 & group$nb_length > 1,]
 result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
 result <- merge(subset, result, by = "nb_length")
 
+
 ```
 
-```{r}
+```{r fig.height=400, fig.width=500}
 
 p <- ggplot(data = all_df, aes(x = nb_place, y = n.x/n.y)) +
-    geom_point()
-  
-p + facet_grid(nb_length ~ .) + geom_point(data = result, color = "red") + facet_grid(nb_length ~ .)
+    geom_point(alpha = .015, position = "jitter")
+    
+p <- p + facet_wrap("nb_length") + geom_point(data = result %>% filter(nb_length <= 14), color = "red") + facet_wrap("nb_length")
 
+p
 ```
-
 
