@@ -27,7 +27,7 @@ library(tidyr)
 library(HMMpa)
 ```
 
-# Getting started
+## Getting started
 
 ```{r}
 load("/Users/lu/Desktop/Winter_2023/sb corpus/sbc.Rdata")
@@ -240,6 +240,37 @@ p <- p + facet_wrap("nb_length") + geom_point(data = result %>% filter(nb_length
 ## Generalized Poisson
 
 ```{r}
+getModel = function(word, file_path, back = F){
+  data_raw <- sbc %>%
+    filter(tolower(text) == word) %>%
+    filter(!is.na(place))
+  
+  if(!back){
+    data_input <- list(
+      N = nrow(data_raw),
+      place = pull(data_raw, place_minus_1),
+      unit_length = pull(data_raw, length_minus_1)
+    )
+  } else {
+    data_input <- list(
+      N = nrow(data_raw),
+      place = pull(data_raw, length_minus_1) - pull(data_raw, place_minus_1) + 1,
+      unit_length = pull(data_raw, length_minus_1)
+    )
+  }
+
+  stan(
+    file = file_path,
+    data = data_input,
+    chain = 4,
+    cores = getOption("mc.cores", 4)
+  )
+}
+
+```
+
+
+```{r}
 gen_pois_he = getModel("he", "Stan/gen_pois.stan", back = F)
 
 ```
@@ -257,7 +288,42 @@ he <- sbc %>%
 ```
 
 #### generate quantities
+
 ```{r}
+set.seed(123)
+theta = 0.7823
+lambda = 0.3263
+unit_length = 9
+
+
+trun_rgen <- function(theta, lambda, unit_length, word, max_length) {
+  prob_list <- c()
+  y_list <- c()
+  for (y in 0:max_length) {
+    prob <- (theta * (theta + lambda * y)^(y-1)) * exp(-theta - lambda * y) / factorial(y)
+    prob_list <- c(prob_list, prob)
+    y_list <- c(y_list, y)
+  }
+  
+  cdf <- data.frame(Value = y_list, Proportion = prob_list)
+  cdf$cum_sum = cumsum(cdf$Proportion)
+  
+  F_L <- cdf[cdf$Value == unit_length, ]$cum_sum
+  cdf$trun_sum <- cdf$cum_sum
+  cdf$trun_sum[cdf$Value <= unit_length] <- cdf$cum_sum[cdf$Value <= unit_length] / F_L
+
+  cdf$trun_sum[cdf$Value > unit_length] <- 1
+  
+  cdf$trun_pmf <- c(cdf$trun_sum[1], diff(cdf$trun_sum))
+  
+  quantities <- sample(cdf$Value, size = 1, replace = TRUE, prob = cdf$trun_pmf)
+  return(quantities)
+}
+
+```
+
+```{r}
+set.seed(123)
 nb_theta_he <- extract(gen_pois_he, pars = c("theta1"))
 nb_lambda_he <- extract(gen_pois_he, pars = c("lambda1"))
 nb_phi_he <- extract(gen_pois_he, pars = c("phi"))
@@ -265,7 +331,7 @@ nb_mu_he <- extract(gen_pois_he, pars = c("mu"))
 
 he_final = data.frame()
 # iterate through 4000 times
-for (i in 1:1000) {
+for (i in 1:200) {
   
   
   # generate length
@@ -273,8 +339,9 @@ for (i in 1:1000) {
                          prob = nb_phi_he$phi[i] / (nb_phi_he$phi[i] + nb_mu_he$mu[i]))
   
   nb_place <- c()
+  max_length <- max(nb_length)
   for (length_val in nb_length) {
-    nb_place <- c(nb_place, rgenpois(1, nb_theta_he$theta1[i], nb_lambda_he$lambda1[i]))
+    nb_place <- c(nb_place, trun_rgen(nb_theta_he$theta1[i], nb_lambda_he$lambda1[i], length_val, he, max_length))
 
   }
   he_generated <- data.frame(nb_length, nb_place)
@@ -288,15 +355,15 @@ for (i in 1:1000) {
 ```{r}
 
 all_df <- data.frame(nb_length = numeric(), nb_place = numeric(), n.x = numeric(), n.y = numeric())
-num_iterations <- nrow(he_final) / length(he$unitWordLen)
+num_iterations <- nrow(he_final) / length(he$length_minus_1)
 
 for (i in 1:num_iterations) {
-  start_index <- (i - 1) * length(he$unitWordLen) + 1
-  end_index <- i * length(he$unitWordLen)
+  start_index <- (i - 1) * length(he$length_minus_1) + 1
+  end_index <- i * length(he$length_minus_1)
   
   subset_data <- he_final[start_index:end_index, ] %>% group_by(nb_length, nb_place) %>% count
   
-  subset <- subset_data[subset_data$nb_length < 15 & subset_data$nb_length > 1,]
+  subset <- subset_data[subset_data$nb_length < 15,]
   result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
   
   merged_df <- merge(subset, result, by = "nb_length")
@@ -304,14 +371,13 @@ for (i in 1:num_iterations) {
   all_df <- rbind(all_df, merged_df)
 }
 
-group <- he[c("unitWordLen", "place")]
+group <- he[c("length_minus_1", "place_minus_1")]
 colnames(group) <- c("nb_length", "nb_place")
 
 group <- group %>% group_by(nb_length, nb_place) %>% count
-subset <- group[group$nb_length < 15 & group$nb_length > 1,]
+subset <- group[group$nb_length < 15,]
 result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
 result <- merge(subset, result, by = "nb_length")
-
 
 ```
 
@@ -326,7 +392,7 @@ p <- p + facet_wrap("nb_length") + geom_point(data = result %>% filter(nb_length
 
 ```
 
-## Hurdle model
+## Hurdle model 's
 
 
 ```{r}
@@ -340,6 +406,10 @@ s <- sbc %>%
 
 #### generate quantities
 ```{r}
+# write a function for cdf
+# draw from uniform distribution, the value of x such
+
+# Use the parameters, get cdf of generalized poisson, draw random number from 0 to 1
 
 nb_theta_s <- extract(gen_pois_s_hurdle, pars = c("theta1"))
 nb_lambda_s <- extract(gen_pois_s_hurdle, pars = c("lambda1"))
@@ -348,7 +418,7 @@ nb_mu_s <- extract(gen_pois_s_hurdle, pars = c("mu"))
 
 s_final = data.frame()
 # iterate through 4000 times
-for (i in 1:1000) {
+for (i in 1:200) {
   
   
   # generate length
@@ -356,8 +426,9 @@ for (i in 1:1000) {
                          prob = nb_phi_s$phi[i] / (nb_phi_s$phi[i] + nb_mu_s$mu[i]))
   
   nb_place <- c()
+  max_length <- max(nb_length)
   for (length_val in nb_length) {
-    nb_place <- c(nb_place, rgenpois(1, nb_theta_s$theta1[i], nb_lambda_s$lambda1[i]))
+    nb_place <- c(nb_place, trun_rgen(nb_theta_s$theta1[i], nb_lambda_s$lambda1[i], length_val, s, max_length))
 
   }
   s_generated <- data.frame(nb_length, nb_place)
@@ -370,15 +441,15 @@ for (i in 1:1000) {
 ```{r}
 
 all_df <- data.frame(nb_length = numeric(), nb_place = numeric(), n.x = numeric(), n.y = numeric())
-num_iterations <- nrow(s_final) / length(s$unitWordLen)
+num_iterations <- nrow(s_final) / length(s$length_minus_1)
 
 for (i in 1:num_iterations) {
-  start_index <- (i - 1) * length(s$unitWordLen) + 1
-  end_index <- i * length(he$unitWordLen)
+  start_index <- (i - 1) * length(s$length_minus_1) + 1
+  end_index <- i * length(s$length_minus_1)
   
   subset_data <- s_final[start_index:end_index, ] %>% group_by(nb_length, nb_place) %>% count
   
-  subset <- subset_data[subset_data$nb_length < 15 & subset_data$nb_length > 1,]
+  subset <- subset_data[subset_data$nb_length < 15,]
   result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
   
   merged_df <- merge(subset, result, by = "nb_length")
@@ -386,11 +457,11 @@ for (i in 1:num_iterations) {
   all_df <- rbind(all_df, merged_df)
 }
 
-group <- s[c("unitWordLen", "place")]
+group <- s[c("length_minus_1", "place_minus_1")]
 colnames(group) <- c("nb_length", "nb_place")
 
 group <- group %>% group_by(nb_length, nb_place) %>% count
-subset <- group[group$nb_length < 15 & group$nb_length > 1,]
+subset <- group[group$nb_length < 15,]
 result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
 result <- merge(subset, result, by = "nb_length")
 
@@ -407,7 +478,7 @@ p <- p + facet_wrap("nb_length") + geom_point(data = result %>% filter(nb_length
 
 
 
-## Hurdle model
+## Hurdle model me
 
 
 ```{r}
@@ -417,6 +488,8 @@ gen_pois_me_hurdle = getModel("me", "Stan/gen_pois_hurdle.stan", back = T)
 me <- sbc %>%
   filter(tolower(text) == "me") %>%
   filter(!is.na(place))
+
+length(me$place)
 ```
 
 #### generate quantities
@@ -453,12 +526,12 @@ all_df <- data.frame(nb_length = numeric(), nb_place = numeric(), n.x = numeric(
 num_iterations <- nrow(me_final) / length(me$unitWordLen)
 
 for (i in 1:num_iterations) {
-  start_index <- (i - 1) * length(s$unitWordLen) + 1
-  end_index <- i * length(he$unitWordLen)
+  start_index <- (i - 1) * length(me$unitWordLen) + 1
+  end_index <- i * length(me$unitWordLen)
   
   subset_data <- me_final[start_index:end_index, ] %>% group_by(nb_length, nb_place) %>% count
   
-  subset <- subset_data[subset_data$nb_length < 15 & subset_data$nb_length > 1,]
+  subset <- subset_data[subset_data$nb_length < 15,]
   result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
   
   merged_df <- merge(subset, result, by = "nb_length")
@@ -466,11 +539,11 @@ for (i in 1:num_iterations) {
   all_df <- rbind(all_df, merged_df)
 }
 
-group <- me[c("unitWordLen", "place")]
+group <- me[c("length_minus_1", "place_minus_1")]
 colnames(group) <- c("nb_length", "nb_place")
 
 group <- group %>% group_by(nb_length, nb_place) %>% count
-subset <- group[group$nb_length < 15 & group$nb_length > 1,]
+subset <- group[group$nb_length < 15,]
 result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
 result <- merge(subset, result, by = "nb_length")
 
@@ -481,7 +554,7 @@ result <- merge(subset, result, by = "nb_length")
 p <- ggplot(data = all_df, aes(x = nb_place, y = n.x/n.y)) +
     geom_point(alpha = .015, position = "jitter")
     
-p + facet_wrap("nb_length") + geom_point(data = result %>% filter(nb_length <= 14), color = "red") + facet_wrap("nb_length")
+p <- p + facet_wrap("nb_length") + geom_point(data = result %>% filter(nb_length <= 14), color = "red") + facet_wrap("nb_length")
 
 ```
 
@@ -573,4 +646,52 @@ p <- p + facet_wrap("nb_length") + geom_point(data = result %>% filter(nb_length
 
 p
 ```
+
+
+
+# WAIC
+
+
+```{r}
+library(loo)
+get_waic <- function(stanfit){
+  # compute WAIC from the returned object from Stan
+  # the log likelihood must be named as 'log_lik'
+  waic <- function(log_lik) {
+    Tn <- - mean(log(colMeans(exp(log_lik))))
+    fV <- mean(colMeans(log_lik^2) - colMeans(log_lik)^2)
+    waic <- Tn + fV
+    waic
+  }
+  
+  stanfit %>% rstan::extract() %>% .$log_lik %>% waic()
+}
+
+get_waic(gen_pois_he)
+```
+
+```{r}
+gen_pois_he = getModel("he", "Stan/gen_pois.stan", back = F)
+
+```
+
+```{r}
+normal_pois_he = getModel("he", "Stan/He_place_given_length_NB.stan", back = F)
+
+```
+
+```{r}
+pois_pois_he = getModel("he", "Stan/He_Pois_Pois.stan", back = F)
+```
+
+
+
+```{r}
+get_waic(gen_pois_he)
+get_waic(normal_pois_he)
+get_waic(pois_pois_he)
+```
+
+
+
 
