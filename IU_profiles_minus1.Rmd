@@ -499,18 +499,20 @@ set.seed(123)
 theta = 4.002e-01
 lambda = 3.812e-01
 unit_length = 9
-psi = 5.600e-04
+psi1 = 5.600e-04
+psi2 = 6.600e-04
 
-trun_hurdle <- function(psi, theta, lambda, unit_length, word, max_length) {
+trun_hurdle <- function(psi1, psi2, theta, lambda, unit_length, word, max_length) {
   prob_list <- c()
   y_list <- c()
-  yp <- psi
-  prob_list <- c(prob_list, yp)
-  y_list <- c(y_list, 0)
+  prob_list <- c(prob_list, psi1, psi2)
+  y_list <- c(y_list, 0, 1)
   
-  for (y in 1:max_length) {
-    prob <- (1-psi)* ((theta * (theta + lambda * y)^(y-1)) * exp(-theta - lambda * y) / factorial(y))/ 
-      (1 - (theta * theta^(-1) * exp(-theta)))
+  for (y in 2:max_length) {
+    prob <- (1-psi1-psi2)* ((theta * (theta + lambda * y)^(y-1)) * exp(-theta - lambda * y) / factorial(y))/ 
+      (1 - (theta * theta^(-1) * exp(-theta)) - (theta * exp(-theta - lambda)) / 2)
+
+
 
     prob_list <- c(prob_list, prob)
     y_list <- c(y_list, y)
@@ -530,6 +532,7 @@ trun_hurdle <- function(psi, theta, lambda, unit_length, word, max_length) {
   quantities <- sample(cdf$Value, size = 1, replace = TRUE, prob = cdf$trun_pmf)
   return(quantities)
 }
+cdf
 ```
 
 ```{r}
@@ -542,11 +545,12 @@ nb_theta_s <- extract(gen_pois_s_hurdle, pars = c("theta1"))
 nb_lambda_s <- extract(gen_pois_s_hurdle, pars = c("lambda1"))
 nb_phi_s <- extract(gen_pois_s_hurdle, pars = c("phi"))
 nb_mu_s <- extract(gen_pois_s_hurdle, pars = c("mu"))
-nb_psi_s <- extract(gen_pois_s_hurdle, pars = c("psi"))
+nb_psi1_s <- extract(gen_pois_s_hurdle, pars = c("psi1"))
+nb_psi2_s <- extract(gen_pois_s_hurdle, pars = c("psi2"))
 
 s_final = data.frame()
 # iterate through 4000 times
-for (i in 1:4000) {
+for (i in 1:500) {
   
   
   # generate length
@@ -556,7 +560,7 @@ for (i in 1:4000) {
   nb_place <- c()
   max_length <- max(nb_length)
   for (length_val in nb_length) {
-    nb_place <- c(nb_place, trun_hurdle(nb_psi_s$psi[i], nb_theta_s$theta1[i], 
+    nb_place <- c(nb_place, trun_hurdle(nb_psi1_s$psi1[i], nb_psi2_s$psi2[i], nb_theta_s$theta1[i], 
                                         nb_lambda_s$lambda1[i], length_val, s, max_length))
 
   }
@@ -700,8 +704,8 @@ get_waic <- function(stanfit){
   # compute WAIC from the returned object from Stan
   # the log likelihood must be named as 'log_lik'
   waic <- function(log_lik) {
-    Tn <- - mean(log(colMeans(exp(log_lik))))
-    fV <- mean(colMeans(log_lik^2) - colMeans(log_lik)^2)
+    Tn <- - sum(log(colMeans(exp(log_lik))))
+    fV <- sum(colMeans(log_lik^2) - colMeans(log_lik)^2)
     waic <- Tn + fV
     waic
   }
@@ -739,6 +743,374 @@ get_waic(pois_pois_he)
 
 ## Mixture model
 
-"or"
+### or
+```{r}
+or <- sbc %>%
+  filter(tolower(text) == 'or') %>%
+  filter(!is.na(place))
+
+```
+
+
+```{r}
+mix_or <- getModel("or", "Stan/mixture_model.stan", back = F)
+```
+
+
+```{r}
+summary(mix_or)
+```
+
+#### actual mixture
+
+
+```{r}
+mix_or2 <- getModel("or", "Stan/trial.stan", back = F)
+
+summary(mix_or2)
+```
+
+#### generate quantities
+```{r}
+set.seed(123)
+theta1 = 9.325e-02
+lambda1 = 3.083e-01
+theta2 = 4.300e+00
+lambda2 = 1.753e-01
+psi = 6.479e-01
+unit_length = 9
+max_length = 15
+v = 0.5
+
+# generate random value from 0 to 1, if smaller than psi, use the first part 
+trun_mix <- function(theta1, lambda1, theta2, lambda2, psi, unit_length, word, max_length, v) {
+  prob_list1 <- c()
+  y_list <- c()
+  prob_list2 <- c()
+  
+  
+  for (y in 0:max_length) {
+    prob1 <- (theta1 * (theta1 + lambda1 * y)^(y-1)) * exp(-theta1 - lambda1 * y) / factorial(y)
+    prob_list1 <- c(prob_list1, prob1)  
+    prob2 <- (theta2 * (theta2 + lambda2 * y)^(y-1)) * exp(-theta2 - lambda2 * y) / factorial(y)
+    prob_list2 <- c(prob_list2, prob2)
+    y_list <- c(y_list, y)
+  }
+  
+  # v < psi
+  cdf1 <- data.frame(Value = y_list, Proportion = prob_list1)
+  cdf1$cum_sum = cumsum(cdf1$Proportion)
+  F_L <- cdf1[cdf1$Value == unit_length, ]$cum_sum
+  cdf1$trun_sum <- cdf1$cum_sum
+  cdf1$trun_sum[cdf1$Value <= unit_length] <- cdf1$cum_sum[cdf1$Value <= unit_length] / F_L
+  cdf1$trun_sum[cdf1$Value > unit_length] <- 1
+  cdf1$trun_pmf <- c(cdf1$trun_sum[1], diff(cdf1$trun_sum))
+  
+  # v > psi
+  cdf2 <- data.frame(Value = y_list, Proportion = prob_list2)
+  cdf2$cum_sum = cumsum(cdf2$Proportion)
+  F_L <- cdf2[cdf2$Value == unit_length, ]$cum_sum
+  cdf2$trun_sum <- cdf2$cum_sum
+  cdf2$trun_sum[cdf2$Value <= unit_length] <- cdf2$cum_sum[cdf2$Value <= unit_length] / F_L
+  cdf2$trun_sum[cdf2$Value > unit_length] <- 1
+  cdf2$trun_pmf <- c(cdf2$trun_sum[1], diff(cdf2$trun_sum))
+  
+  if (v < psi) {
+    quantities <- sample(cdf1$Value, size = 1, replace = TRUE, prob = cdf1$trun_pmf)
+  }
+  else {
+    quantities <- sample(cdf2$Value, size = 1, replace = TRUE, prob = cdf2$trun_pmf)
+  }
+  return(quantities)
+}
+
+```
+
+```{r}
+# write a function for cdf
+# draw from uniform distribution, the value of x such
+
+# Use the parameters, get cdf of generalized poisson, draw random number from 0 to 1
+
+nb_theta1_or <- rstan::extract(mix_or2, pars = c("theta1"))
+nb_lambda1_or <- rstan::extract(mix_or2, pars = c("lambda1"))
+nb_theta2_or <- rstan::extract(mix_or2, pars = c("theta2"))
+nb_lambda2_or <- rstan::extract(mix_or2, pars = c("lambda2"))
+
+nb_phi1_or <- rstan::extract(mix_or2, pars = c("phi1"))
+nb_mu1_or <- rstan::extract(mix_or2, pars = c("mu1"))
+nb_phi2_or <- rstan::extract(mix_or2, pars = c("phi2"))
+nb_mu2_or <- rstan::extract(mix_or2, pars = c("mu2"))
+nb_psi_or <- rstan::extract(mix_or2, pars = c("psi"))
+
+## generate a v for each length, then divide them into corresponding group then go to cdf,  
+or_final = data.frame()
+# iterate through 4000 times
+for (j in 1:1000) {
+  
+  nb_length <- c()
+  li <- c()
+  gi <- c()
+  for (i in 1:length(or$length_minus_1)) {
+    v <- runif(1, 0, 1)      # generate a value
+    psi <- nb_psi_or$psi[i]
+    if (v < psi) {
+      len1 <- rnbinom(1, size = nb_phi1_or$phi1[i], 
+                        prob = nb_phi1_or$phi1[i] / (nb_phi1_or$phi1[i] + nb_mu1_or$mu1[i]))
+      nb_length1 <- c(nb_length1, len1)
+      max_length1 <- max(nb_length1)
+      li <- c(li, i)
+      
+    } else {
+      len2 <- rnbinom(1, size = nb_phi2_or$phi2[i], 
+                            prob = nb_phi2_or$phi2[i] / (nb_phi2_or$phi2[i] + nb_mu2_or$mu2[i]))
+      nb_length2 <- c(nb_length2, len2)
+      max_length2 <- max(nb_length2)
+      gi <- c(gi, i)
+      }
+  }
+
+  nb_place1 <- c()
+  for (k in 1:length(nb_length1)){
+    nb_place1 <- c(nb_place1, trun_mix(nb_theta1_or$theta1[li[k]], nb_lambda1_or$lambda1[li[k]],
+                                       nb_theta2_or$theta2[li[k]], nb_lambda2_or$lambda2[li[k]],
+                                       psi, nb_length1[k], or, max_length))
+  }
+  
+  nb_place2 <- c()
+  for (k in 1:length(nb_length1)){
+    nb_place1 <- c(nb_place1, trun_mix(nb_theta1_or$theta1[li[k]], nb_lambda1_or$lambda1[li[k]],
+                                       nb_theta2_or$theta2[li[k]], nb_lambda2_or$lambda2[li[k]],
+                                       psi, nb_length1[k], or, max_length))
+  }
+  
+  nb_length <- c(nb_length1, nb_length2)
+  
+  
+  
+  or_generated <- data.frame(nb_length, nb_place)
+  or_final <- rbind(or_final, or_generated)
+}
+
+
+
+  if (v < psi) {
+    for (length_val in nb_length) {
+      nb_place <- c(nb_place, trun_mix(nb_theta1_or$theta1[i], nb_lambda1_or$lambda1[i],
+                                       nb_theta2_or$theta2[i], nb_lambda2_or$lambda2[i],
+                                       psi, length_val, or, max_length, v))
+    }
+  }  
+```
+
+#### visualization
+
+```{r}
+
+all_df <- data.frame(nb_length = numeric(), nb_place = numeric(), n.x = numeric(), n.y = numeric())
+num_iterations <- nrow(or_final) / length(or$unitWordLen)
+
+for (i in 1:num_iterations) {
+  start_index <- (i - 1) * length(or$unitWordLen) + 1
+  end_index <- i * length(or$unitWordLen)
+  
+  subset_data <- or_final[start_index:end_index, ] %>% group_by(nb_length, nb_place) %>% count
+  
+  subset <- subset_data[subset_data$nb_length < 15,]
+  result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+  
+  merged_df <- merge(subset, result, by = "nb_length")
+  
+  all_df <- rbind(all_df, merged_df)
+}
+
+group <- or[c("length_minus_1", "place_minus_1")]
+colnames(group) <- c("nb_length", "nb_place")
+
+group <- group %>% group_by(nb_length, nb_place) %>% count
+subset <- group[group$nb_length < 15,]
+result <- aggregate(n ~ nb_length, data = subset, FUN = sum)
+result <- merge(subset, result, by = "nb_length")
+
+```
+
+```{r fig.height=400, fig.width=500}
+
+p <- ggplot(data = all_df, aes(x = nb_place, y = n.x/n.y)) +
+    geom_point(alpha = .015, position = "jitter")
+    
+p <- p + facet_wrap("nb_length") + geom_point(data = result %>% filter(nb_length <= 14), color = "red") + facet_wrap("nb_length")
+
+```
+
+
+
+
+
+
+## Regression
+
+
+
+```{r}
+he <- sbc %>%
+  filter(tolower(text) == 'he') %>%
+  filter(!is.na(place))
+
+```
+
+
+```{r}
+he_length <- list()
+length <- c()
+for (i in seq(sort(unique(he$length_minus_1)))) {
+   he_length[[i]] = he %>% filter(length_minus_1 == sort(unique(he$length_minus_1))[i])
+   length <- c(length, sort(unique(he$length_minus_1))[i])
+}
+length_df <- data.frame(length)
+length_df
+```
+
+
+```{r}
+getModel_reg = function(file_path, data_raw, back = F){
+  
+  if(!back){
+    data_input <- list(
+      N = nrow(data_raw),
+      place = pull(data_raw, place_minus_1),
+      unit_length = pull(data_raw, length_minus_1)
+    )
+  } else {
+    data_input <- list(
+      N = nrow(data),
+      place = pull(data_raw, length_minus_1) - pull(data_raw, place_minus_1),
+      unit_length = pull(data_raw, length_minus_1)
+    )
+  }
+
+  stan(
+    file = file_path,
+    data = data_input,
+    chain = 4,
+    cores = getOption("mc.cores", 4)
+  )
+}
+
+file_path = 'Stan/regre_gen.stan'
+length_list = he_length
+regre_gen_df <- function(df, length_list, word, file_path, back = F) {
+  thetas <- c()
+  lambdas <- c()
+  words <- rep(word, length(length_list))
+  for (i in length_list) {
+    stan_model <- getModel_reg(file_path, i, back = F)
+    theta <- summary(stan_model)[[1]][1]
+    thetas <- c(thetas, theta)
+    lambda <- summary(stan_model)[[1]][2]
+    lambdas <- c(lambdas, lambda)
+  }
+  df$lambda <- lambdas
+  df$theta <- thetas
+  df$words <- words
+  
+  return(df)
+}
+
+stan_model <- getModel_reg(file_path, length_list[[19]], back = F)
+theta <- summary(stan_model)[[1]][1]
+thetas <- c(thetas, theta)
+lambda <- summary(stan_model)[[1]][2]
+lambdas <- c(lambdas, lambda)
+
+
+
+```
+
+```{r}
+he_reg_df <- regre_gen_df(length_df, he_length, 'he', 'Stan/regre_gen.stan', back = F)
+```
+
+```{r}
+num_rows <- nrow(length_df)
+# Remove the last row from the dataframe
+length_df <- length_df[-num_rows, ]
+length_df <- as.data.frame(length_df)
+length_df$lambda <- lambdas
+length_df$theta <- thetas
+
+length_df
+```
+
+```{r}
+plot(length_df$lambda, length_df$length_df)
+plot(length_df$theta, length_df$length_df)
+```
+
+
+
+```{r}
+model <- lm(length_df ~ lambda, data = length_df)
+
+summary(model)
+plot(model)
+```
+
+
+```{r}
+model <- lm(length_df ~ theta, data = length_df)
+
+summary(model)
+plot(model)
+
+```
+
+### Regression within stan
+
+```{r}
+he <- sbc %>%
+  filter(tolower(text) == 'he') %>%
+  filter(!is.na(place))
+
+```
+
+
+```{r}
+getModel = function(word, file_path, back = F){
+  data_raw <- sbc %>%
+    filter(tolower(text) == word) %>%
+    filter(!is.na(place))
+  
+  if(!back){
+    data_input <- list(
+      N = nrow(data_raw),
+      place = pull(data_raw, place_minus_1),
+      unit_length = pull(data_raw, length_minus_1)
+    )
+  } else {
+    data_input <- list(
+      N = nrow(data_raw),
+      place = pull(data_raw, length_minus_1) - pull(data_raw, place_minus_1) + 1,
+      unit_length = pull(data_raw, length_minus_1)
+    )
+  }
+
+  stan(
+    file = file_path,
+    data = data_input,
+    chain = 4,
+    cores = getOption("mc.cores", 4)
+  )
+}
+```
+
+```{r}
+he_regre <- getModel("he", "Stan/Regression.stan", back = F)
+```
+
+```{r}
+summary(he_regre)
+```
+
 
 
