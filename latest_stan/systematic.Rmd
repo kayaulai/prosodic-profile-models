@@ -406,7 +406,7 @@ get_waic <- function(stanfit){
   # the log likelihood must be named as 'log_lik'
   waic <- function(log_lik) {
     Tn <- - mean(log(colMeans(exp(log_lik))))
-    s <- ncol(log_lik)
+    s <- nrow(log_lik)
     fV <- (sum(colMeans(log_lik^2) - colMeans(log_lik)^2))*(s/(s-1)) #s/s-1 then multiply whole thing by two 
     waic <- 2*(Tn + fV)
     waic
@@ -414,6 +414,7 @@ get_waic <- function(stanfit){
   
   stanfit %>% rstan::extract() %>% .$log_lik %>% waic()
 }
+
 
 ```
 
@@ -1590,7 +1591,7 @@ print(p26)
 ## 24 about
 
 ### Gen
-
+come back to this
 ```{r}
 output <- generate_vis("about", "gen")
 p27 <- output[[1]]
@@ -1625,7 +1626,7 @@ print(p_around_hur0)
 
 ## 26 be
 ### Gen
-
+try hurdle
 ```{r}
 output <- generate_vis("be", "gen")
 p_be_gen <- output[[1]]
